@@ -11,11 +11,13 @@
 
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
+using System.Runtime.Intrinsics.Arm;
 using System.Security.Cryptography;
 using System.Text;
 
-namespace libravatarsharp;
+namespace LibravatarSharp;
 
 public static class AvatarUri
 {
@@ -48,8 +50,8 @@ public static class AvatarUri
     public static Uri FromEmail(string email, AvatarOptions options)
     {
         var identity = CanonicalizeEmail(email);
-        var hashFunction = options.UseSHA256 ? (Func<string, string>)SHA256Hash : MD5Hash;
-        return FromHashedIdentity(hashFunction(identity), options);
+        using var hashAlg = options.GetHashAlgorithm();
+        return FromHashedIdentity(Hash(identity, hashAlg), options);
     }
 
     /// <summary>
@@ -81,20 +83,15 @@ public static class AvatarUri
     public static Uri FromOpenID(string openid, AvatarOptions options)
     {
         var identity = CanonicalizeOpenID(openid);
-        var hashFunction = (Func<string, string>)SHA256Hash; // MD5 is not supported for OpenID.
-        return FromHashedIdentity(hashFunction(identity), options);
+
+        using var hashAlg = MD5.Create();
+
+        return FromHashedIdentity(Hash(identity, hashAlg), options);
     }
 
     static Uri FromHashedIdentity(string hash, AvatarOptions options)
     {
-        var args = new Dictionary<string, string>();
-        if (options.DefaultImage != null)
-            args["d"] = options.DefaultImage;
-        if (options.Size != null)
-            args["s"] = options.Size.ToString();
-
-        var baseUri = options.PreferHttps ? options.SecureBaseUri : options.BaseUri;
-        var uri = baseUri + hash + UriQueryFromArgs(args);
+        var uri = options.BaseUri + hash + UriQueryFromArgs(options.GetQueryParameters());
         return new Uri(uri);
     }
 
@@ -109,18 +106,6 @@ public static class AvatarUri
                 args.Select(kv => string.Format("{0}={1}", kv.Key, Uri.EscapeDataString(kv.Value)))
                     .ToArray()
             );
-    }
-
-    static string MD5Hash(string s)
-    {
-        using (var h = MD5.Create())
-            return Hash(s, h);
-    }
-
-    static string SHA256Hash(string s)
-    {
-        using (var h = SHA256.Create())
-            return Hash(s, h);
     }
 
     static string Hash(string s, HashAlgorithm h)
@@ -165,24 +150,47 @@ public class AvatarOptions
     /// </summary>
     public string DefaultImage = AvatarDefaultImages.Default;
 
+    private const int MinSize = 1;
+    private const int MaxSize = 512;
+
     /// <summary>
     /// Size of the image requested. Valid values are between 1 and 512 pixels. The default
     /// size is 80 pixels.
     /// </summary>
-    public int? Size;
+    public int? Size
+    {
+        get => (_size >= MinSize && _size <= MaxSize) ? _size : null;
+        set => _size = value;
+    }
+    private int? _size;
 
     /// <summary>
     /// Specifies a custom base URI for HTTP use. The default is to use the official
-    /// libravatar HTTP server. If you *really* wanted to use a non-free server, you
+    /// libravatar HTTP server. If you <b>really</b> wanted to use a non-free server, you
     /// could set this to "http://gravatar.com/avatar/", but why would you do such a thing?
     /// </summary>
-    public string BaseUri = "http://cdn.libravatar.org/avatar/";
+    public string UnsecureBaseUri = "http://cdn.libravatar.org/avatar/";
 
     /// <summary>
     /// Specifies a custom base URI for HTTPS use. The default is to use the official
     /// libravatar HTTPS server.
     /// </summary>
     public string SecureBaseUri = "https://seccdn.libravatar.org/avatar/";
+
+    public string BaseUri => PreferHttps ? SecureBaseUri : UnsecureBaseUri;
+
+    public Dictionary<string, string> GetQueryParameters()
+    {
+        var dict = new Dictionary<string, string>();
+        if (Size is not null)
+            dict.Add("s", Size.Value.ToString());
+        if (DefaultImage is not null)
+            dict.Add("d", DefaultImage);
+
+        return dict;
+    }
+
+    public HashAlgorithm GetHashAlgorithm() => UseSHA256 ? SHA256.Create() : MD5.Create();
 }
 
 public static class AvatarDefaultImages
@@ -190,35 +198,35 @@ public static class AvatarDefaultImages
     /// <summary>
     /// The default image provided by the libravatar server
     /// </summary>
-    public static readonly string Default = null;
+    public const string Default = null;
 
     /// <summary>
     /// No image at all. The server will return an HTTP 404 Not Found response instead
     /// </summary>
-    public static readonly string Error = "404";
+    public const string Error = "404";
 
     /// <summary>
     /// A generic "person" image
     /// </summary>
-    public static readonly string Person = "mm";
+    public const string Person = "mm";
 
     /// <summary>
     /// A colored geometric pattern generated from the hash
     /// </summary>
-    public static readonly string Identicon = "identicon";
+    public const string Identicon = "identicon";
 
     /// <summary>
     /// A monster image generated from the hash
     /// </summary>
-    public static readonly string MonsterID = "monsterid";
+    public const string MonsterID = "monsterid";
 
     /// <summary>
     /// A face image generated from the hash
     /// </summary>
-    public static readonly string Wavatar = "wavatar";
+    public const string Wavatar = "wavatar";
 
     /// <summary>
     /// A retro-styled image generated from the hash
     /// </summary>
-    public static readonly string Retro = "retro";
+    public const string Retro = "retro";
 }
